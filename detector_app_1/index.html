@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>ROS Control Interface</title>
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <!-- ROS stuff -->
+    <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/easeljs/lib/easeljs.min.js"></script>
+    <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/eventemitter2/lib/eventemitter2.min.js"></script>
+    <script type="text/javascript" src="https://s3.eu-west-1.amazonaws.com/rosject.io/js/roslib.min.js"></script>
+    <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/ros2d/build/ros2d.min.js"></script>
+
+    <!-- Vuejs -->
+    <script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.min.js"></script>
+
+    <style>
+        body {
+            background-color: #f0f0f0;
+        }
+
+        .main-container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        #dragstartzone {
+            position: relative;
+            z-index: 10;
+            display: inline-block;
+            width: 220px;
+            height: 220px;
+            border: 2px solid #ced4da;
+            border-radius: 50%;
+            -moz-user-select: -moz-none;
+            -khtml-user-select: none;
+            -webkit-user-select: none;
+        }
+
+        #dragCircle {
+            position: absolute;
+            z-index: 9;
+            border: 1px solid #ced4da;
+            border-radius: 50%;
+            background: #f8f9fa;
+            -moz-user-select: -moz-none;
+            -khtml-user-select: none;
+            -webkit-user-select: none;
+        }
+
+        #dragCircle:hover {
+            background-color: #e2e6ea;
+        }
+
+        #logs-content {
+            background-color: #ffffff;
+            color: #000;
+            padding: 10px;
+            height: 100px;
+            overflow-y: auto;
+        }
+
+        .card-header {
+            background-color: #343a40;
+            color: #fff;
+            border-bottom: none;
+        }
+
+        .card {
+            border: 1px solid #ced4da;
+        }
+
+        .status-card {
+            background-color: #f8f9fa;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            padding: 15px;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            justify-content: center;
+            height: 100%;
+        }
+
+        .status-card p {
+            margin: 0;
+            color: #495057;
+            font-weight: 500;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="app" class="container-fluid main-container">
+        <nav class="navbar navbar-dark bg-dark mb-3">
+            <div class="container-fluid">
+                <form class="d-flex w-100" role="search">
+                    <label for="websocket-url" class="text-white me-2">WebSocket URL:</label>
+                    <input class="form-control me-2" type="text" v-model="rosbridge_address" id="websocket-url"
+                        name="websocket-url" placeholder="e.g. ws://localhost:9090">
+                    <button class="btn btn-danger me-2" @click="disconnect" v-if="connected" type="button"
+                        id="disconnect-button">Disconnect</button>
+                    <button class="btn btn-primary me-2" @click="connect" v-else type="button"
+                        id="connect-button">Connect</button>
+                </form>
+            </div>
+        </nav>
+
+        <div class="row">
+            <aside class="col-md-3 mb-3">
+                <div class="card">
+                    <div class="card-body">
+                        <div class="d-grid gap-2 mb-3">
+                            <!-- Updated buttons to send commands -->
+                            <button id="start-system" class="btn btn-primary" @click="sendCommand(1)"
+                                :disabled="disableControls">Start Search</button>
+                            <button id="stop-system" class="btn btn-secondary" @click="sendCommand(0)"
+                                :disabled="disableControls">Stop System</button>
+                            <!-- Force Stop button (never disabled) -->
+                            <button id="force-stop" class="btn btn-danger" @click="sendCommand(0)">Force Stop</button>
+                            <button id="return-home" class="btn btn-info text-white" @click="sendCommand(2)"
+                                :disabled="disableControls">Return to Home</button>
+
+                            <!-- Elevator Up/Down buttons -->
+                            <button class="btn btn-warning" @click="elevatorUp" :disabled="disableControls">Elevator
+                                Up</button>
+                            <button class="btn btn-warning" @click="elevatorDown" :disabled="disableControls">Elevator
+                                Down</button>
+
+                            <!-- Voice Control -->
+                            <button v-if="!recording" @click="startRecording" class="btn btn-success"
+                                :disabled="disableControls">Voice Control</button>
+                            <button v-else @click="stopRecording" class="btn btn-danger"
+                                :disabled="disableControls">Stop Recording</button>
+                            <p v-if="recording" class="text-danger fw-bold">Recording...</p>
+                        </div>
+                        <div class="d-flex justify-content-center">
+                            <div class="card-body">
+                                <div id="dragstartzone" @mousedown="startDrag" @mousemove="doDrag"
+                                    @touchstart="startDrag" @touchmove="doDrag" @touchend="stopDrag"></div>
+                                <div id="dragCircle" :style="dragCircleStyle"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+
+            <section class="col-md-9">
+                <div class="row">
+                    <div class="col-md-6 mb-3">
+                        <div class="card h-100">
+                            <div class="card-header">
+                                <h5 class="card-title mb-0">Map View</h5>
+                            </div>
+                            <div class="card-body d-flex align-items-center justify-content-center"
+                                style="background-color: #e9ecef;">
+                                <canvas id="map" width="340" height="340" style="border:1px solid #6c757d;"></canvas>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-md-6 d-flex flex-column">
+                        <!-- Current Task -->
+                        <div class="status-card mb-3">
+                            <p>Current Task</p>
+                            <!-- Show current task in red if available -->
+                            <p v-if="currentTaskName" style="color:red;">{{ currentTaskName }}</p>
+                        </div>
+
+                        <!-- Last Run -->
+                        <div class="status-card mb-3">
+                            <p>Last Run</p>
+                            <!-- Show "Success" in green if lastRunSuccess -->
+                            <p v-if="lastRunSuccess" style="color:green;">Success</p>
+                        </div>
+
+                        <!-- Positional Data -->
+                        <div class="status-card mb-3">
+                            <p>Positional Data</p>
+                            <!-- Show robot x and y if available -->
+                            <p v-if="robotPose">X: {{ robotPose.x.toFixed(2) }}, Y: {{ robotPose.y.toFixed(2) }}</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="row mt-3">
+                    <div class="col-12">
+                        <div class="card">
+                            <div class="card-header">
+                                <h5 class="mb-0">Logs</h5>
+                            </div>
+                            <div class="card-body" id="logs">
+                                <div id="logs-content" class="rounded">
+                                    <ul class="mb-0">
+                                        <li v-for="log in logs">{{log}}</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </section>
+        </div>
+    </div>
+
+    <script type="text/javascript">
+        var script = document.createElement('script');
+        script.type = 'text/javascript';
+        script.src = 'main.js?v=11.' + Date.now();
+        document.head.appendChild(script);
+    </script>
+
+</body>
+
+</html>
